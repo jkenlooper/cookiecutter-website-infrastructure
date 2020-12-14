@@ -1,0 +1,62 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Set Roles and Policies for {{ cookiecutter.project_slug }} stack.
+
+Metadata:
+  Author: Jake Hickenlooper
+
+Parameters:
+  ProjectSlug:
+    Type: "String"
+    Description: Should not change. See build-change-set.cfn.yaml
+    Default: "{{ cookiecutter.project_slug }}"
+    AllowedValues:
+      - "{{ cookiecutter.project_slug }}"
+
+Resources:
+
+
+  S3UpdateWebsiteProductionPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName: "S3UpdateWebsiteProductionPolicy"
+      Roles:
+        - Fn::ImportValue:
+            !Sub "root-${ProjectSlug}S3UpdateWebsiteProductionRole"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Action:
+              - "s3:PutObject"
+              - "s3:GetObject"
+              - "s3:DeleteObject"
+              - "s3:ListObjectsV2"
+            Resource:
+              - !Sub
+                - "${staticwebsitebucketarn}/${ProjectSlug}/production/*"
+                -
+                  staticwebsitebucketarn:
+                    Fn::ImportValue: "root-StaticWebsiteBucketArn"
+          -
+            Effect: Allow
+            Action:
+              - "s3:ListBucket"
+              - "s3:GetBucketLocation"
+            Resource:
+              -
+                Fn::ImportValue: "root-StaticWebsiteBucketArn"
+          -
+            Effect: Allow
+            Action:
+              - "logs:CreateLogStream"
+              - "logs:CreateLogGroup"
+              - "logs:PutLogEvents"
+            Resource:
+              - !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:${ProjectSlug}-SyncGreenToBlue:log-stream:*"
+              - !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:${ProjectSlug}-SyncGreenToBlue"
+              - !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:${ProjectSlug}-DeployGreenVersion:log-stream:*"
+              - !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:${ProjectSlug}-DeployGreenVersion"
+

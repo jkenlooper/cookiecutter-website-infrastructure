@@ -1,0 +1,192 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  A static site backed by CloudFront CDN. Uses a blue-green deployment via two
+  origins in an origin group. The origins can be swapped when needing to revert
+  a blue-green deployment.
+
+Metadata:
+  Author: Jake Hickenlooper
+
+Parameters:
+
+  ProjectSlug:
+    Type: String
+    Description: Should not change. See build-change-set.cfn.yaml
+    Default: "{{ cookiecutter.project_slug }}"
+    AllowedValues:
+      - "{{ cookiecutter.project_slug }}"
+
+  BlueVersion:
+    Type: String
+  GreenVersion:
+    Type: String
+
+  SecretHeaderString:
+    Type: "AWS::SSM::Parameter::Value<String>"
+    Default: "/{{ cookiecutter.project_slug }}/secret-header-string"
+    AllowedValues:
+      - "/{{ cookiecutter.project_slug }}/secret-header-string"
+
+  HostedZoneId:
+    Type: 'AWS::Route53::HostedZone::Id'
+
+  CloudFrontHostedZoneId:
+    Type: String
+    Default: Z2FDTNDATAQYW2
+    AllowedValues:
+      - Z2FDTNDATAQYW2
+    Description: Z2FDTNDATAQYW2 is the hosted zone id of cloudfront domain name.
+
+  CertificateArn:
+    Type: String
+    Description: See parameter in build-change-set CloudFormation template.
+    AllowedPattern: "arn:aws:acm:us-east-1:[0-9]+:certificate/.+"
+
+Resources:
+
+  CloudFrontProduction:
+    Type: 'AWS::CloudFront::Distribution'
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      DistributionConfig:
+        Aliases:
+          - "{{ cookiecutter.site_domain }}"
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateArn
+          MinimumProtocolVersion: "TLSv1.2_2019"
+          SslSupportMethod: sni-only
+        Comment: !Sub >
+          ${ProjectSlug} production blue-green
+        DefaultCacheBehavior:
+          Compress: true
+          TargetOriginId: "blue-green-failover"
+          # Managed-CachingOptimized
+          CachePolicyId: "658327ea-f89d-4fab-a63d-7e88639e58f6"
+          ViewerProtocolPolicy: redirect-to-https
+        DefaultRootObject: index.html
+        CustomErrorResponses:
+          -
+            ErrorCachingMinTTL: 1200
+            ErrorCode: 404
+            ResponseCode: 404
+            ResponsePagePath: "/notfound.html"
+          -
+            ErrorCachingMinTTL: 1200
+            ErrorCode: 403
+            ResponseCode: 403
+            ResponsePagePath: "/error.html"
+          -
+            ErrorCachingMinTTL: 1200
+            ErrorCode: 500
+            ResponseCode: 500
+            ResponsePagePath: "/error.html"
+          -
+            ErrorCachingMinTTL: 60
+            ErrorCode: 502
+            ResponseCode: 200
+            ResponsePagePath: "/maintenance.html"
+          -
+            ErrorCachingMinTTL: 60
+            ErrorCode: 503
+            ResponseCode: 200
+            ResponsePagePath: "/maintenance.html"
+          -
+            ErrorCachingMinTTL: 60
+            ErrorCode: 504
+            ResponseCode: 200
+            ResponsePagePath: "/maintenance.html"
+        Enabled: true
+        PriceClass: PriceClass_All
+        # TODO: Enable logging requests on the distribution. Will need a bucket
+        # configured for storing access logs.
+        #Logging:
+        #  Bucket: a-logging-bucket.s3.amazonaws.com
+        #  IncludeCookies: false
+        #  Prefix: !Sub "${ProjectSlug}/production/"
+        OriginGroups:
+          Items:
+            -
+              Id: "blue-green-failover"
+              FailoverCriteria:
+                StatusCodes:
+                  Items:
+                    - 404
+                  Quantity: 1
+              Members:
+                Items:
+                  -
+                    OriginId: "green"
+                  -
+                    OriginId: "blue"
+                Quantity: 2
+          Quantity: 2
+        Origins:
+          -
+            Id: "blue"
+            CustomOriginConfig:
+              # The S3 static website is only accessible via http
+              OriginProtocolPolicy: http-only
+            DomainName: !Select
+              - 1
+              - !Split
+                - "://"
+                - Fn::ImportValue: root-StaticWebsiteURL
+            OriginCustomHeaders:
+              -
+                HeaderName: Referer
+                HeaderValue: !Ref SecretHeaderString
+            OriginPath: !Sub "/${ProjectSlug}/production/${BlueVersion}"
+          -
+            Id: "green"
+            CustomOriginConfig:
+              # The S3 static website is only accessible via http
+              OriginProtocolPolicy: http-only
+            DomainName: !Select
+              - 1
+              - !Split
+                - "://"
+                - Fn::ImportValue: root-StaticWebsiteURL
+            OriginCustomHeaders:
+              -
+                HeaderName: Referer
+                HeaderValue: !Ref SecretHeaderString
+            OriginPath: !Sub "/${ProjectSlug}/production/${GreenVersion}"
+
+  InvalidationPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName: !Sub "${ProjectSlug}-InvalidationPolicy"
+      Roles:
+        - Fn::ImportValue:
+            !Sub "root-${ProjectSlug}S3UpdateWebsiteProductionRole"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Action:
+              - "cloudfront:CreateInvalidation"
+            Resource:
+              - !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontProduction}"
+
+  DomainNameRoot:
+    Type: AWS::Route53::RecordSet
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: "{{ cookiecutter.site_domain }}."
+      Type: A
+      AliasTarget:
+        HostedZoneId: !Ref CloudFrontHostedZoneId
+        DNSName: !GetAtt CloudFrontProduction.DomainName
+
+Outputs:
+  ProductionWebsiteURL:
+    Value: !Ref DomainNameRoot
+  CloudFrontProduction:
+    Value: !Ref CloudFrontProduction
+    Export:
+      Name: !Sub "${ProjectSlug}-CloudFrontProduction"

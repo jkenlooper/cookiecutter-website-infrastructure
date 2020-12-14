@@ -1,0 +1,11 @@
+default_context:
+  project_name: "{{ cookiecutter.project_name }}"
+  repo_name: "{{ cookiecutter.repo_name }}"
+  project_slug: "{{ cookiecutter.project_slug }}"
+  site_domain: "{{ cookiecutter.site_domain }}"
+  full_name: "{{ cookiecutter.full_name }}"
+  email: "{{ cookiecutter.email }}"
+  project_short_description: "{{ cookiecutter.project_short_description }}"
+  version: "{{ cookiecutter.version }}"
+  now: "{{ cookiecutter.now }}"
+  generated_by_cookiecutter_website_infrastructure_version: "{{ cookiecutter.generated_by_cookiecutter_website_infrastructure_version }}"

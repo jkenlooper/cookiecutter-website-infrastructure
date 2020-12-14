@@ -1,0 +1,308 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: "AWS::Serverless-2016-10-31"
+
+Description: >
+  Support CI/CD for a static website.
+
+Metadata:
+  Author: Jake Hickenlooper
+
+Parameters:
+
+  ProjectSlug:
+    Type: String
+    Description: Should not change. See build-change-set.cfn.yaml
+    Default: "{{ cookiecutter.project_slug }}"
+    AllowedValues:
+      - "{{ cookiecutter.project_slug }}"
+
+  GitHubCloneURL:
+    Type: "AWS::SSM::Parameter::Value<String>"
+    Default: "/{{ cookiecutter.project_slug }}/github-clone-url"
+    AllowedValues:
+      - "/{{ cookiecutter.project_slug }}/github-clone-url"
+    Description: >
+      The https clone URL for the project.
+
+  ManualVerificationEmail:
+    Type: "AWS::SSM::Parameter::Value<String>"
+    Default: "/{{ cookiecutter.project_slug }}/manual-verification-email"
+    AllowedValues:
+      - "/{{ cookiecutter.project_slug }}/manual-verification-email"
+    Description: >
+      Email address to send a notification to when the staging site needs to be
+      manually verified.
+
+  SecretHeaderString:
+    Type: "AWS::SSM::Parameter::Value<String>"
+    Default: "/{{ cookiecutter.project_slug }}/secret-header-string"
+    AllowedValues:
+      - "/{{ cookiecutter.project_slug }}/secret-header-string"
+    Description: >
+      Secret string in the Referer header that CloudFront will use when
+      accessing files from the S3 bucket. This blocks direct public access of
+      the static sites bucket unless the Referer header with this string is
+      used.
+
+  GitBranchToBuildFrom:
+    Type: String
+    Default: "release"
+    Description: >
+      This is the branch that will be checked out when building the static.zip.
+      It is also used when running the code build integration spec.
+  PatternToTriggerBuild:
+    Type: String
+    Default: "^refs/heads/release"
+    Description: >
+      Set the git branch or tags pattern that will trigger a build.
+
+  FileCountThresholdForCacheInvalidations:
+    Type: Number
+    Default: 20
+  CacheControlForTheme:
+    Type: String
+    Default: "max-age=31536000"
+  CacheControlForMedia:
+    Type: String
+    Default: "max-age=1200, s-maxage=31536000"
+  CacheControlForIndexHTML:
+    Type: String
+    Default: "max-age=0, s-maxage=1200"
+  CacheControlDefault:
+    Type: String
+    Default: "max-age=300, s-maxage=31536000"
+
+  LoggingLevel:
+    Type: String
+    Default: "INFO"
+    AllowedValues:
+      - "DEBUG"
+      - "INFO"
+      - "WARNING"
+
+Resources:
+
+  StaticPatch:
+    Type: 'AWS::CodeBuild::Project'
+    Properties:
+      Name: !Sub "${ProjectSlug}-StaticPatch"
+      Description: >
+        Directly patch the S3 production files and invalidate any CloudFront
+        cache for files that have changed.
+      ServiceRole:
+        Fn::ImportValue:
+          !Sub "root-${ProjectSlug}S3UpdateWebsiteProductionRoleArn"
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: "aws/codebuild/standard:4.0"
+        ImagePullCredentialsType: CODEBUILD
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          -
+            Name: PROJECT_SLUG
+            Type: PLAINTEXT
+            Value: !Ref ProjectSlug
+          -
+            Name: FILE_COUNT_THRESHOLD_FOR_CACHE_INVALIDATIONS
+            Type: PLAINTEXT
+            Value: !Ref FileCountThresholdForCacheInvalidations
+          -
+            Name: STATIC_SITE_FILES_BUCKET
+            Type: PLAINTEXT
+            Value:
+              Fn::ImportValue: "root-StaticWebsiteBucket"
+          -
+            Name: CACHE_CONTROL_FOR_THEME
+            Type: PLAINTEXT
+            Value: !Ref CacheControlForTheme
+          -
+            Name: CACHE_CONTROL_FOR_MEDIA
+            Type: PLAINTEXT
+            Value: !Ref CacheControlForMedia
+          -
+            Name: CACHE_CONTROL_FOR_INDEX_HTML
+            Type: PLAINTEXT
+            Value: !Ref CacheControlForIndexHTML
+          -
+            Name: CACHE_CONTROL_DEFAULT
+            Type: PLAINTEXT
+            Value: !Ref CacheControlDefault
+          -
+            Name: ARTIFACT_BUCKET
+            Type: PLAINTEXT
+            Value:
+              Fn::ImportValue: "root-ArtifactBucket"
+          -
+            Name: CLOUDFRONT_PRODUCTION
+            Type: PLAINTEXT
+            Value:
+              Fn::ImportValue:
+                Fn::Sub: "${ProjectSlug}-CloudFrontProduction"
+      Artifacts:
+        Type: NO_ARTIFACTS
+      LogsConfig:
+        CloudWatchLogs:
+          GroupName: !Sub "${ProjectSlug}-StaticPatch"
+          Status: ENABLED
+      QueuedTimeoutInMinutes: 10
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          env:
+            shell: bash
+            variables:
+              STATIC_SITE_FILES_BUCKET: ""
+          phases:
+            build:
+              commands:
+                - aws --version
+                - |
+                    aws s3 cp \
+                      s3://${ARTIFACT_BUCKET}/${PROJECT_SLUG}/StaticBuild/parameters.json \
+                      parameters.json
+                - BLUE_VERSION=$(jq -r '.[] | select(.ParameterKey == "BlueVersion") | .ParameterValue' parameters.json)
+                - GREEN_VERSION=$(jq -r '.[] | select(.ParameterKey == "GreenVersion") | .ParameterValue' parameters.json)
+                - |
+                    aws s3 cp \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/${GREEN_VERSION}/ \
+                      current \
+                      --recursive \
+                      --no-progress
+                - cp -r current new
+                - |
+                    (
+                      cd current
+                      # Limit to just files that will rely on cache
+                      # invalidations.  This will exclude theme, media, and any
+                      # index.html, notfound.html, error.html, and maintenance.html files.
+                      find ./* -maxdepth 0 ! -path ./media ! -path ./theme | xargs -I {} find {} -type f ! -name notfound.html ! -name error.html ! -name maintenance.html ! -name index.html | xargs md5sum > ../current_checksums
+                    )
+                # Get the patch file.
+                - |
+                    aws s3 cp \
+                      s3://${ARTIFACT_BUCKET}/${PROJECT_SLUG}/StaticBuild/static.patch \
+                      static.patch \
+                      --no-progress
+                # Apply the patch locally to the new directory, create the
+                # changed-files.txt by doing a md5sum check.
+                - |
+                    (
+                      cd new
+                      patch --no-backup-if-mismatch --remove-empty-files --force -r - --silent -p1 < ../static.patch
+                      # TODO: Verify that files that have been removed are not added to the changed-files.txt.
+                      md5sum --check --quiet --ignore-missing ../current_checksums 2> /dev/null | sed -E 's#\./(.+): FAILED$#/\1#' > ../changed-files.txt
+                    )
+                # Deploy the new patched green version and make the old green
+                # version the blue version. Use orange to preserve the metadata
+                # like Cache-Control headers.
+                - |
+                    aws s3 sync \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/${GREEN_VERSION} \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/${BLUE_VERSION} \
+                      --no-progress \
+                      --delete
+                    aws s3 sync \
+                      new/theme \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/orange/theme \
+                      --cache-control "${CACHE_CONTROL_FOR_THEME}" \
+                      --metadata-directive REPLACE \
+                      --no-progress \
+                      --delete
+                    aws s3 sync \
+                      new/media \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/orange/media \
+                      --cache-control "${CACHE_CONTROL_FOR_MEDIA}" \
+                      --metadata-directive REPLACE \
+                      --no-progress \
+                      --delete
+                    aws s3 sync \
+                      new \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/orange \
+                      --cache-control "${CACHE_CONTROL_FOR_INDEX_HTML}" \
+                      --metadata-directive REPLACE \
+                      --exclude "*" \
+                      --include "*/index.html" \
+                      --include "index.html" \
+                      --include "notfound.html" \
+                      --include "error.html" \
+                      --include "maintenance.html" \
+                      --no-progress \
+                      --delete
+                    aws s3 sync \
+                      new \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/orange \
+                      --cache-control "${CACHE_CONTROL_DEFAULT}" \
+                      --metadata-directive REPLACE \
+                      --exclude "theme" \
+                      --exclude "media" \
+                      --exclude "*/index.html" \
+                      --exclude "index.html" \
+                      --exclude "notfound.html" \
+                      --exclude "error.html" \
+                      --exclude "maintenance.html" \
+                      --no-progress \
+                      --delete
+                    aws s3 sync \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/orange \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/${GREEN_VERSION} \
+                      --no-progress \
+                      --delete
+                # Create the invalidations for this deployment (skip if no
+                # changed files).
+                # Don't rely on cache invalidation for deployments.
+                # Only root files which rarely change and can't have cache-busting URLs should rely
+                # on cache invalidations. These would be favicon.ico,
+                # robots.txt, humans.txt and such.
+                - |
+                    CHANGED_FILE_COUNT=$(wc -l changed-files.txt | cut -d ' ' -f1)
+                    if [ $CHANGED_FILE_COUNT -gt $FILE_COUNT_THRESHOLD_FOR_CACHE_INVALIDATIONS ]; then
+                      echo "Changed file count of $CHANGED_FILE_COUNT has passed the $FILE_COUNT_THRESHOLD_FOR_CACHE_INVALIDATIONS threshold; invalidating all paths (/*)"
+                      head -n100 changed-files.txt
+                      if [ $CHANGED_FILE_COUNT -gt 100 ]; then
+                        echo "...plus $(($CHANGED_FILE_COUNT - 100)) more files."
+                      fi
+                      aws cloudfront create-invalidation \
+                        --distribution-id $CLOUDFRONT_PRODUCTION \
+                        --paths '/*';
+                    elif [ $CHANGED_FILE_COUNT -eq 0 ]; then
+                      echo "No changed files. Skipping cache invalidation creation."
+                    else
+                      echo "Creating a cache invalidation for the below files:"
+                      cat changed-files.txt
+                      jq --raw-input --null-input --raw-output \
+                        --arg caller_reference $CODEBUILD_BUILD_ID \
+                        --arg file_count $CHANGED_FILE_COUNT \
+                        '[inputs] | {
+                          CallerReference: $caller_reference,
+                          Paths: {
+                            Quantity: $file_count | tonumber,
+                            Items: .
+                          }
+                        }' changed-files.txt > invalidations.json
+                      aws cloudfront create-invalidation \
+                        --distribution-id $CLOUDFRONT_PRODUCTION \
+                        --invalidation-batch file://invalidations.json
+                    fi
+                # Update the maintenance.html, notfound.html, and error.html
+                # file that will be used. Copies from green to blue since the
+                # blue-green-failover will use the blue version for missing
+                # paths.
+                - |
+                    aws s3 cp \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/${GREEN_VERSION}/error.html \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/${BLUE_VERSION}/error.html
+                    aws s3 cp \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/${GREEN_VERSION}/notfound.html \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/${BLUE_VERSION}/notfound.html
+                    aws s3 cp \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/${GREEN_VERSION}/maintenance.html \
+                      s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/${BLUE_VERSION}/maintenance.html
+                # Set the new green version file for use by future updates
+                - echo "${GREEN_VERSION}" > NG
+                - |
+                  aws s3 cp \
+                    NG \
+                    s3://${STATIC_SITE_FILES_BUCKET}/${PROJECT_SLUG}/production/GREEN_VERSION
+      TimeoutInMinutes: 10
+
