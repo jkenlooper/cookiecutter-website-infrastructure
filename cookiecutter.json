@@ -1,6 +1,6 @@
 {
   "project_name": "Llama Example Infrastructure",
-  "repo_name": "{{ cookiecutter.project_name.lower().replace(' ', '-) }}",
+  "repo_name": "{{ cookiecutter.project_name.lower().replace(' ', '-') }}",
   "project_slug": "{{ cookiecutter.repo_name.lower().replace(' ', '').replace('infrastructure', '') }}",
   "site_domain": "{{ cookiecutter.project_name.lower().replace(' ', '.') }}",
   "full_name": "Sir Llama the Web Developer",
@@ -9,12 +9,6 @@
   "version": "0.1.0",
   "now": "YYYY-MM-DD",
   "renow": "{{ cookiecutter.now }}",
-  "generated_by_cookiecutter_website_infrastructure_version": "0.4.0",
-  "regenerated_by_cookiecutter_website_infrastructure_version": "{{ cookiecutter.generated_by_cookiecutter_website_infrastructure_version }}",
-  "_copy_without_render": [
-    "templates",
-    "src",
-    "media",
-    "queries"
-  ]
+  "generated_by_cookiecutter_website_infrastructure_version": "0.1.0",
+  "regenerated_by_cookiecutter_website_infrastructure_version": "{{ cookiecutter.generated_by_cookiecutter_website_infrastructure_version }}"
 }

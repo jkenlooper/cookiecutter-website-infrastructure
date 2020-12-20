@@ -33,13 +33,27 @@ Parameters:
 
 Resources:
 
+  BuildChangeSetServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+
   BuildChangeSetPolicy:
     Type: "AWS::IAM::Policy"
     Properties:
       PolicyName: "BuildChangeSetPolicy"
       Roles:
-        - Fn::ImportValue:
-            !Sub "root-${ProjectSlug}BuildChangeSetRole"
+        - !Ref BuildChangeSetServiceRole
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -104,14 +118,10 @@ Resources:
             Effect: "Allow"
             Resource:
               - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectSlug}/*"
+              - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/shared/secret-header-string"
             Action:
+              - "ssm:GetParameter"
               - "ssm:GetParameters"
-          #-
-          #  Effect: "Allow"
-          #  Resource:
-          #    - !GetAtt CloudFormationRole.Arn
-          #  Action:
-          #    - "iam:PassRole"
 
   BuildChangeSet:
     Type: 'AWS::CodeBuild::Project'
@@ -143,19 +153,11 @@ Resources:
             Type: PLAINTEXT
             Value: !Ref "AWS::Region"
           -
-            Name: ROLE_ARN
-            Type: PLAINTEXT
-            Value:
-              Fn::ImportValue:
-                !Sub "root-${ProjectSlug}CloudFormationRoleArn"
-          -
             Name: CERTIFICATE_ARN
             Type: PLAINTEXT
             Value: !Ref CertificateArn
       QueuedTimeoutInMinutes: 10
-      ServiceRole:
-        Fn::ImportValue:
-          !Sub "root-${ProjectSlug}BuildChangeSetRoleArn"
+      ServiceRole: !GetAtt "BuildChangeSetServiceRole.Arn"
       TimeoutInMinutes: 10
       Source:
         Location: !Sub
@@ -207,8 +209,6 @@ Resources:
                         --s3-prefix cloudformation/package-templates/${STACK_NAME} \
                         --output-template-file $TMP_DIR/security.cfn.yaml;
                       aws s3 cp $TMP_DIR/security.cfn.yaml s3://${ARTIFACT_BUCKET}/cloudformation/package-templates/${STACK_NAME}/
-                      # TODO: use a role for the cloudformation?
-                      #--role-arn $ROLE_ARN \
                       aws cloudformation create-change-set \
                         --change-set-name $CHANGE_SET_NAME \
                         --stack-name ${STACK_NAME}-security \
@@ -236,9 +236,7 @@ Resources:
                     jq --raw-output \
                       'map(
                           select(
-                            .ParameterKey == "GitBranchToBuildFrom"
-                            or .ParameterKey == "PatternToTriggerBuild"
-                            or .ParameterKey == "FileCountThresholdForCacheInvalidations"
+                            .ParameterKey == "FileCountThresholdForCacheInvalidations"
                             or .ParameterKey == "CacheControlForTheme"
                             or .ParameterKey == "CacheControlForMedia"
                             or .ParameterKey == "CacheControlDefault"
@@ -259,8 +257,6 @@ Resources:
                         --s3-prefix cloudformation/package-templates/${STACK_NAME} \
                         --output-template-file $TMP_DIR/devops.cfn.yaml;
                       aws s3 cp $TMP_DIR/devops.cfn.yaml s3://${ARTIFACT_BUCKET}/cloudformation/package-templates/${STACK_NAME}/
-                      # TODO: use a role for the cloudformation?
-                      #--role-arn $ROLE_ARN \
                       aws cloudformation create-change-set \
                         --change-set-name $CHANGE_SET_NAME \
                         --stack-name ${STACK_NAME}-devops \
@@ -319,8 +315,6 @@ Resources:
                         --s3-prefix cloudformation/package-templates/${STACK_NAME} \
                         --output-template-file $TMP_DIR/${STACK_NAME}.cfn.yaml;
                       aws s3 cp $TMP_DIR/${STACK_NAME}.cfn.yaml s3://${ARTIFACT_BUCKET}/cloudformation/package-templates/${STACK_NAME}/
-                      # TODO: use a role for the cloudformation?
-                      #--role-arn $ROLE_ARN \
                       aws cloudformation create-change-set \
                         --change-set-name $CHANGE_SET_NAME \
                         --capabilities CAPABILITY_IAM \

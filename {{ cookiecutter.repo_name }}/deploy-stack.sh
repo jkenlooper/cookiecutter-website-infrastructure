@@ -24,16 +24,10 @@ for template in $CF_TEMPLATES; do
   cfn-lint $template;
 done
 
-(
-cd cleanup;
-git clean -dx -f;
-)
-
 aws --profile $AWSCONFIG_PROFILE s3 cp $PARAMETERS_FILE "s3://${ARTIFACT_BUCKET}/cloudformation/source-templates/${STACK_NAME}/parameters.json"
 for item in $CF_TEMPLATES; do
   aws --profile $AWSCONFIG_PROFILE s3 cp $item "s3://${ARTIFACT_BUCKET}/cloudformation/source-templates/${STACK_NAME}/"
 done
-aws --profile $AWSCONFIG_PROFILE s3 cp cleanup "s3://${ARTIFACT_BUCKET}/cloudformation/source-templates/${STACK_NAME}/cleanup/" --recursive
 
 # Assuming that the artifact bucket is in the same region.
 for item in $CF_TEMPLATES; do

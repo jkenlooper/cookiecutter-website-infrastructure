@@ -24,9 +24,9 @@ Parameters:
 
   SecretHeaderString:
     Type: "AWS::SSM::Parameter::Value<String>"
-    Default: "/{{ cookiecutter.project_slug }}/secret-header-string"
+    Default: "/shared/secret-header-string"
     AllowedValues:
-      - "/{{ cookiecutter.project_slug }}/secret-header-string"
+      - "/shared/secret-header-string"
 
   HostedZoneId:
     Type: 'AWS::Route53::HostedZone::Id'
@@ -157,10 +157,10 @@ Resources:
   InvalidationPolicy:
     Type: "AWS::IAM::Policy"
     Properties:
-      PolicyName: !Sub "${ProjectSlug}-InvalidationPolicy"
+      PolicyName: "InvalidationPolicy"
       Roles:
         - Fn::ImportValue:
-            !Sub "root-${ProjectSlug}S3UpdateWebsiteProductionRole"
+            !Sub "${ProjectSlug}-UpdateStaticWebsiteServiceRole"
       PolicyDocument:
         Version: "2012-10-17"
         Statement:

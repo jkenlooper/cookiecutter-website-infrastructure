@@ -16,14 +16,31 @@ Parameters:
 
 Resources:
 
+  UpdateStaticWebsiteServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: >
+        For CodeBuild and Lambda projects that need to update objects in static
+        website and artifact S3 buckets.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
 
-  S3UpdateWebsiteProductionPolicy:
+  UpdateStaticWebsitePolicy:
     Type: "AWS::IAM::Policy"
     Properties:
-      PolicyName: "S3UpdateWebsiteProductionPolicy"
+      PolicyName: "UpdateStaticWebsitePolicy"
       Roles:
-        - Fn::ImportValue:
-            !Sub "root-${ProjectSlug}S3UpdateWebsiteProductionRole"
+        - !Ref "UpdateStaticWebsiteServiceRole"
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -36,7 +53,7 @@ Resources:
               - "s3:ListObjectsV2"
             Resource:
               - !Sub
-                - "${staticwebsitebucketarn}/${ProjectSlug}/production/*"
+                - "${staticwebsitebucketarn}/${ProjectSlug}/*"
                 -
                   staticwebsitebucketarn:
                     Fn::ImportValue: "root-StaticWebsiteBucketArn"
@@ -48,6 +65,36 @@ Resources:
             Resource:
               -
                 Fn::ImportValue: "root-StaticWebsiteBucketArn"
+              -
+                Fn::ImportValue: "root-ArtifactBucketArn"
+          -
+            Effect: Allow
+            Action:
+              - "s3:PutObject"
+              - "s3:GetObject"
+              - "s3:ListObjectsV2"
+            Resource:
+              - !Sub
+                - "${artifactbucketbucketarn}/staticbuild/${ProjectSlug}/*"
+                -
+                  artifactbucketbucketarn:
+                    Fn::ImportValue: "root-ArtifactBucketArn"
+          -
+            Effect: Allow
+            Action:
+              - "s3:GetObject"
+            Resource:
+              - !Sub
+                - "${pipelinebucketarn}/*"
+                -
+                  pipelinebucketarn:
+                    Fn::ImportValue: "root-PipelineBucketArn"
+          -
+            Action:
+              - "codepipeline:PutJobSuccessResult"
+              - "codepipeline:PutJobFailureResult"
+            Effect: "Allow"
+            Resource: "*"
           -
             Effect: Allow
             Action:
@@ -55,8 +102,16 @@ Resources:
               - "logs:CreateLogGroup"
               - "logs:PutLogEvents"
             Resource:
-              - !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:${ProjectSlug}-SyncGreenToBlue:log-stream:*"
-              - !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:${ProjectSlug}-SyncGreenToBlue"
-              - !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:${ProjectSlug}-DeployGreenVersion:log-stream:*"
-              - !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:${ProjectSlug}-DeployGreenVersion"
+              - !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:${ProjectSlug}-*:log-stream:*"
+              - !Sub "arn:aws:logs:*:${AWS::AccountId}:log-group:${ProjectSlug}-*"
 
+Outputs:
+
+  UpdateStaticWebsiteServiceRole:
+    Value: !Ref UpdateStaticWebsiteServiceRole
+    Export:
+      Name: !Sub "${ProjectSlug}-UpdateStaticWebsiteServiceRole"
+  UpdateStaticWebsiteServiceRoleArn:
+    Value: !GetAtt UpdateStaticWebsiteServiceRole.Arn
+    Export:
+      Name: !Sub "${ProjectSlug}-UpdateStaticWebsiteServiceRoleArn"
