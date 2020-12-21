@@ -31,6 +31,11 @@ Parameters:
       us-east-1 region so CloudFront can use it.
     AllowedPattern: "arn:aws:acm:us-east-1:[0-9]+:certificate/.+"
 
+  HostedZoneId:
+    Type: 'AWS::Route53::HostedZone::Id'
+    Description: >
+      Create a Route53 Hosted Zone for {{ cookiecutter.project_slug }}.
+
 Resources:
 
   BuildChangeSetServiceRole:
@@ -156,6 +161,10 @@ Resources:
             Name: CERTIFICATE_ARN
             Type: PLAINTEXT
             Value: !Ref CertificateArn
+          -
+            Name: HOSTED_ZONE_ID
+            Type: PLAINTEXT
+            Value: !Ref HostedZoneId
       QueuedTimeoutInMinutes: 10
       ServiceRole: !GetAtt "BuildChangeSetServiceRole.Arn"
       TimeoutInMinutes: 10
@@ -285,10 +294,15 @@ Resources:
                 - |
                     jq --null-input --raw-output \
                       --arg certificate_arn $CERTIFICATE_ARN \
+                      --arg hostedzoneid $HOSTED_ZONE_ID \
                       '[
                         {
                           "ParameterKey": "CertificateArn",
                           "ParameterValue": $certificate_arn
+                        },
+                        {
+                          "ParameterKey": "HostedZoneId",
+                          "ParameterValue": $hostedzoneid
                         }
                        ]' > $TMP_DIR/other-parameters.json
                     jq --raw-output --slurp \
